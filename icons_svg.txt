@@ -1,0 +1,1 @@
+inkscape ./flutter/web/favicon.svg ./res/rustdesk-banner.svg ./res/scalable.svg ./res/logo-header.svg ./res/design.svg ./flutter/assets/logo.svg ./res/logo.svg
