@@ -3,8 +3,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_hbb/common/widgets/dialog.dart';
 import 'package:flutter_hbb/consts.dart';
-import 'package:flutter_hbb/models/ab_model.dart';
 import 'package:flutter_hbb/models/peer_tab_model.dart';
+import 'package:flutter_hbb/models/state_model.dart';
 import 'package:get/get.dart';
 import 'package:provider/provider.dart';
 
@@ -22,6 +22,8 @@ typedef PopupMenuEntryBuilder = Future<List<mod_menu.PopupMenuEntry<String>>>
 enum PeerUiType { grid, tile, list }
 
 final peerCardUiType = PeerUiType.grid.obs;
+
+bool? hideUsernameOnCard;
 
 class _PeerCard extends StatefulWidget {
   final Peer peer;
@@ -52,42 +54,44 @@ class _PeerCardState extends State<_PeerCard>
   @override
   Widget build(BuildContext context) {
     super.build(context);
-    if (isDesktop) {
-      return _buildDesktop();
-    } else {
-      return _buildMobile();
-    }
+    return Obx(() =>
+        stateGlobal.isPortrait.isTrue ? _buildPortrait() : _buildLandscape());
   }
 
-  Widget _buildMobile() {
-    final peer = super.widget.peer;
+  Widget gestureDetector({required Widget child}) {
     final PeerTabModel peerTabModel = Provider.of(context);
+    final peer = super.widget.peer;
+    return GestureDetector(
+        onDoubleTap: peerTabModel.multiSelectionMode
+            ? null
+            : () => widget.connect(context, peer.id),
+        onTap: () {
+          if (peerTabModel.multiSelectionMode) {
+            peerTabModel.select(peer);
+          } else {
+            if (isMobile) {
+              widget.connect(context, peer.id);
+            } else {
+              peerTabModel.select(peer);
+            }
+          }
+        },
+        onLongPress: () => peerTabModel.select(peer),
+        child: child);
+  }
+
+  Widget _buildPortrait() {
+    final peer = super.widget.peer;
     return Card(
         margin: EdgeInsets.symmetric(horizontal: 2),
-        child: GestureDetector(
-          onTap: () {
-            if (peerTabModel.multiSelectionMode) {
-              peerTabModel.select(peer);
-            } else {
-              if (!isWebDesktop) {
-                connectInPeerTab(context, peer, widget.tab);
-              }
-            }
-          },
-          onDoubleTap: isWebDesktop
-              ? () => connectInPeerTab(context, peer, widget.tab)
-              : null,
-          onLongPress: () {
-            peerTabModel.select(peer);
-          },
+        child: gestureDetector(
           child: Container(
               padding: EdgeInsets.only(left: 12, top: 8, bottom: 8),
               child: _buildPeerTile(context, peer, null)),
         ));
   }
 
-  Widget _buildDesktop() {
-    final PeerTabModel peerTabModel = Provider.of(context);
+  Widget _buildLandscape() {
     final peer = super.widget.peer;
     var deco = Rx<BoxDecoration?>(
       BoxDecoration(
@@ -116,45 +120,48 @@ class _PeerCardState extends State<_PeerCard>
           ),
         );
       },
-      child: GestureDetector(
-          onDoubleTap:
-              peerTabModel.multiSelectionMode || peerTabModel.isShiftDown
-                  ? null
-                  : () => widget.connect(context, peer.id),
-          onTap: () => peerTabModel.select(peer),
-          onLongPress: () => peerTabModel.select(peer),
+      child: gestureDetector(
           child: Obx(() => peerCardUiType.value == PeerUiType.grid
               ? _buildPeerCard(context, peer, deco)
               : _buildPeerTile(context, peer, deco))),
     );
   }
 
-  Widget _buildPeerTile(
-      BuildContext context, Peer peer, Rx<BoxDecoration?>? deco) {
-    final name =
-        '${peer.username}${peer.username.isNotEmpty && peer.hostname.isNotEmpty ? '@' : ''}${peer.hostname}';
+  makeChild(bool isPortrait, Peer peer) {
+    final name = hideUsernameOnCard == true
+        ? peer.hostname
+        : '${peer.username}${peer.username.isNotEmpty && peer.hostname.isNotEmpty ? '@' : ''}${peer.hostname}';
     final greyStyle = TextStyle(
         fontSize: 11,
         color: Theme.of(context).textTheme.titleLarge?.color?.withOpacity(0.6));
-    final child = Row(
+    return Row(
       mainAxisSize: MainAxisSize.max,
       children: [
         Container(
-          decoration: BoxDecoration(
-            color: str2color('${peer.id}${peer.platform}', 0x7f),
-            borderRadius: isMobile
-                ? BorderRadius.circular(_tileRadius)
-                : BorderRadius.only(
-                    topLeft: Radius.circular(_tileRadius),
-                    bottomLeft: Radius.circular(_tileRadius),
+            decoration: BoxDecoration(
+              color: str2color('${peer.id}${peer.platform}', 0x7f),
+              borderRadius: isPortrait
+                  ? BorderRadius.circular(_tileRadius)
+                  : BorderRadius.only(
+                      topLeft: Radius.circular(_tileRadius),
+                      bottomLeft: Radius.circular(_tileRadius),
+                    ),
+            ),
+            alignment: Alignment.center,
+            width: isPortrait ? 50 : 42,
+            height: isPortrait ? 50 : null,
+            child: Stack(
+              children: [
+                getPlatformImage(peer.platform, size: isPortrait ? 38 : 30)
+                    .paddingAll(6),
+                if (_shouldBuildPasswordIcon(peer))
+                  Positioned(
+                    top: 1,
+                    left: 1,
+                    child: Icon(Icons.key, size: 6, color: Colors.white),
                   ),
-          ),
-          alignment: Alignment.center,
-          width: isMobile ? 50 : 42,
-          height: isMobile ? 50 : null,
-          child: getPlatformImage(peer.platform, size: isMobile ? 38 : 30)
-              .paddingAll(6),
-        ),
+              ],
+            )),
         Expanded(
           child: Container(
             decoration: BoxDecoration(
@@ -170,19 +177,19 @@ class _PeerCardState extends State<_PeerCard>
                   child: Column(
                     children: [
                       Row(children: [
-                        getOnline(isMobile ? 4 : 8, peer.online),
+                        getOnline(isPortrait ? 4 : 8, peer.online),
                         Expanded(
                             child: Text(
                           peer.alias.isEmpty ? formatID(peer.id) : peer.alias,
                           overflow: TextOverflow.ellipsis,
                           style: Theme.of(context).textTheme.titleSmall,
                         )),
-                      ]).marginOnly(top: isMobile ? 0 : 2),
+                      ]).marginOnly(top: isPortrait ? 0 : 2),
                       Align(
                         alignment: Alignment.centerLeft,
                         child: Text(
                           name,
-                          style: isMobile ? null : greyStyle,
+                          style: isPortrait ? null : greyStyle,
                           textAlign: TextAlign.start,
                           overflow: TextOverflow.ellipsis,
                         ),
@@ -190,59 +197,65 @@ class _PeerCardState extends State<_PeerCard>
                     ],
                   ).marginOnly(top: 2),
                 ),
-                isMobile
-                    ? checkBoxOrActionMoreMobile(peer)
-                    : checkBoxOrActionMoreDesktop(peer, isTile: true),
+                isPortrait
+                    ? checkBoxOrActionMorePortrait(peer)
+                    : checkBoxOrActionMoreLandscape(peer, isTile: true),
               ],
             ).paddingOnly(left: 10.0, top: 3.0),
           ),
         )
       ],
     );
+  }
+
+  Widget _buildPeerTile(
+      BuildContext context, Peer peer, Rx<BoxDecoration?>? deco) {
+    hideUsernameOnCard ??=
+        bind.mainGetBuildinOption(key: kHideUsernameOnCard) == 'Y';
     final colors = _frontN(peer.tags, 25)
         .map((e) => gFFI.abModel.getCurrentAbTagColor(e))
         .toList();
     return Tooltip(
-      message: isMobile
+      message: !(isDesktop || isWebDesktop)
           ? ''
           : peer.tags.isNotEmpty
               ? '${translate('Tags')}: ${peer.tags.join(', ')}'
               : '',
       child: Stack(children: [
-        deco == null
-            ? child
-            : Obx(
-                () => Container(
+        Obx(
+          () => deco == null
+              ? makeChild(stateGlobal.isPortrait.isTrue, peer)
+              : Container(
                   foregroundDecoration: deco.value,
-                  child: child,
+                  child: makeChild(stateGlobal.isPortrait.isTrue, peer),
                 ),
-              ),
-        if (_shouldBuildPasswordIcon(peer))
-          Positioned(
-            top: 2,
-            left: isMobile ? 60 : 50,
-            child: Icon(Icons.key, size: 12),
-          ),
+        ),
         if (colors.isNotEmpty)
-          Positioned(
-            top: 2,
-            right: isMobile ? 20 : 10,
-            child: CustomPaint(
-              painter: TagPainter(radius: 3, colors: colors),
-            ),
-          )
+          Obx(() => Positioned(
+                top: 2,
+                right: stateGlobal.isPortrait.isTrue ? 20 : 10,
+                child: CustomPaint(
+                  painter: TagPainter(radius: 3, colors: colors),
+                ),
+              ))
       ]),
     );
   }
 
   Widget _buildPeerCard(
       BuildContext context, Peer peer, Rx<BoxDecoration?> deco) {
-    final name =
-        '${peer.username}${peer.username.isNotEmpty && peer.hostname.isNotEmpty ? '@' : ''}${peer.hostname}';
+    hideUsernameOnCard ??=
+        bind.mainGetBuildinOption(key: kHideUsernameOnCard) == 'Y';
+    final name = hideUsernameOnCard == true
+        ? peer.hostname
+        : '${peer.username}${peer.username.isNotEmpty && peer.hostname.isNotEmpty ? '@' : ''}${peer.hostname}';
     final child = Card(
       color: Colors.transparent,
       elevation: 0,
       margin: EdgeInsets.zero,
+      // to-do: memory leak here, more investigation needed.
+      // Continious rebuilds of `Obx()` will cause memory leak here.
+      // The simple demo does not have this issue.
       child: Obx(
         () => Container(
           foregroundDecoration: deco.value,
@@ -306,7 +319,7 @@ class _PeerCardState extends State<_PeerCard>
                           style: Theme.of(context).textTheme.titleSmall,
                         )),
                       ]).paddingSymmetric(vertical: 8)),
-                      checkBoxOrActionMoreDesktop(peer, isTile: false),
+                      checkBoxOrActionMoreLandscape(peer, isTile: false),
                     ],
                   ).paddingSymmetric(horizontal: 12.0),
                 )
@@ -330,7 +343,7 @@ class _PeerCardState extends State<_PeerCard>
           Positioned(
             top: 4,
             left: 12,
-            child: Icon(Icons.key, size: 12),
+            child: Icon(Icons.key, size: 12, color: Colors.white),
           ),
         if (colors.isNotEmpty)
           Positioned(
@@ -352,7 +365,7 @@ class _PeerCardState extends State<_PeerCard>
     }
   }
 
-  Widget checkBoxOrActionMoreMobile(Peer peer) {
+  Widget checkBoxOrActionMorePortrait(Peer peer) {
     final PeerTabModel peerTabModel = Provider.of(context);
     final selected = peerTabModel.isPeerSelected(peer.id);
     if (peerTabModel.multiSelectionMode) {
@@ -380,7 +393,7 @@ class _PeerCardState extends State<_PeerCard>
     }
   }
 
-  Widget checkBoxOrActionMoreDesktop(Peer peer, {required bool isTile}) {
+  Widget checkBoxOrActionMoreLandscape(Peer peer, {required bool isTile}) {
     final PeerTabModel peerTabModel = Provider.of(context);
     final selected = peerTabModel.isPeerSelected(peer.id);
     if (peerTabModel.multiSelectionMode) {
@@ -626,8 +639,8 @@ abstract class BasePeerCard extends StatelessWidget {
 
   @protected
   Future<bool> _isForceAlwaysRelay(String id) async {
-    return (await bind.mainGetPeerOption(id: id, key: kOptionForceAlwaysRelay))
-        .isNotEmpty;
+    return option2bool(kOptionForceAlwaysRelay,
+        (await bind.mainGetPeerOption(id: id, key: kOptionForceAlwaysRelay)));
   }
 
   @protected
@@ -748,8 +761,10 @@ abstract class BasePeerCard extends StatelessWidget {
         if (succ) {
           showToast(translate('Successful'));
         } else {
-          BotToast.showText(
-              contentColor: Colors.red, text: translate("Failed"));
+          if (tab.index == PeerTabIndex.ab.index) {
+            BotToast.showText(
+                contentColor: Colors.red, text: translate("Failed"));
+          }
         }
       },
       padding: menuPadding,
@@ -864,7 +879,7 @@ class RecentPeerCard extends BasePeerCard {
       BuildContext context) async {
     final List<MenuEntryBase<String>> menuItems = [
       _connectAction(context),
-      if (!isWeb) _transferFileAction(context),
+      _transferFileAction(context),
     ];
 
     final List favs = (await bind.mainGetFav()).toList();
@@ -883,8 +898,7 @@ class RecentPeerCard extends BasePeerCard {
       menuItems.add(_createShortCutAction(peer.id));
     }
     menuItems.add(MenuEntryDivider());
-    if (!isWeb) {
-      // TODO: support web version
+    if (isMobile || isDesktop || isWebDesktop) {
       menuItems.add(_renameAction(peer.id));
     }
     if (await bind.mainPeerHasPassword(id: peer.id)) {
@@ -924,7 +938,7 @@ class FavoritePeerCard extends BasePeerCard {
       BuildContext context) async {
     final List<MenuEntryBase<String>> menuItems = [
       _connectAction(context),
-      if (!isWeb) _transferFileAction(context),
+      _transferFileAction(context),
     ];
     if (isDesktop && peer.platform != kPeerPlatformAndroid) {
       menuItems.add(_tcpTunnelingAction(context));
@@ -940,8 +954,7 @@ class FavoritePeerCard extends BasePeerCard {
       menuItems.add(_createShortCutAction(peer.id));
     }
     menuItems.add(MenuEntryDivider());
-    if (!isWeb) {
-      // TODO: support web version
+    if (isMobile || isDesktop || isWebDesktop) {
       menuItems.add(_renameAction(peer.id));
     }
     if (await bind.mainPeerHasPassword(id: peer.id)) {
@@ -978,7 +991,7 @@ class DiscoveredPeerCard extends BasePeerCard {
       BuildContext context) async {
     final List<MenuEntryBase<String>> menuItems = [
       _connectAction(context),
-      if (!isWeb) _transferFileAction(context),
+      _transferFileAction(context),
     ];
 
     final List favs = (await bind.mainGetFav()).toList();
@@ -1031,7 +1044,7 @@ class AddressBookPeerCard extends BasePeerCard {
       BuildContext context) async {
     final List<MenuEntryBase<String>> menuItems = [
       _connectAction(context),
-      if (!isWeb) _transferFileAction(context),
+      _transferFileAction(context),
     ];
     if (isDesktop && peer.platform != kPeerPlatformAndroid) {
       menuItems.add(_tcpTunnelingAction(context));
@@ -1046,8 +1059,7 @@ class AddressBookPeerCard extends BasePeerCard {
     }
     if (gFFI.abModel.current.canWrite()) {
       menuItems.add(MenuEntryDivider());
-      if (!isWeb) {
-        // TODO: support web version
+      if (isMobile || isDesktop || isWebDesktop) {
         menuItems.add(_renameAction(peer.id));
       }
       if (gFFI.abModel.current.isPersonal() && peer.hash.isNotEmpty) {
@@ -1106,7 +1118,8 @@ class AddressBookPeerCard extends BasePeerCard {
   MenuEntryBase<String> _changeSharedAbPassword() {
     return MenuEntryButton<String>(
       childBuilder: (TextStyle? style) => Text(
-        translate('Set shared password'),
+        translate(
+            peer.password.isEmpty ? 'Set shared password' : 'Change Password'),
         style: style,
       ),
       proc: () {
@@ -1163,7 +1176,7 @@ class MyGroupPeerCard extends BasePeerCard {
       BuildContext context) async {
     final List<MenuEntryBase<String>> menuItems = [
       _connectAction(context),
-      if (!isWeb) _transferFileAction(context),
+      _transferFileAction(context),
     ];
     if (isDesktop && peer.platform != kPeerPlatformAndroid) {
       menuItems.add(_tcpTunnelingAction(context));
@@ -1193,6 +1206,7 @@ class MyGroupPeerCard extends BasePeerCard {
 }
 
 void _rdpDialog(String id) async {
+  final maxLength = bind.mainMaxEncryptLen();
   final port = await bind.mainGetPeerOption(id: id, key: 'rdp_port');
   final username = await bind.mainGetPeerOption(id: id, key: 'rdp_username');
   final portController = TextEditingController(text: port);
@@ -1247,50 +1261,54 @@ void _rdpDialog(String id) async {
                 ),
               ],
             ).marginOnly(bottom: isDesktop ? 8 : 0),
-            Row(
-              children: [
-                isDesktop
-                    ? ConstrainedBox(
-                        constraints: const BoxConstraints(minWidth: 140),
-                        child: Text(
-                          "${translate('Username')}:",
-                          textAlign: TextAlign.right,
-                        ).marginOnly(right: 10))
-                    : SizedBox.shrink(),
-                Expanded(
-                  child: TextField(
-                    decoration: InputDecoration(
-                        labelText: isDesktop ? null : translate('Username')),
-                    controller: userController,
-                  ),
-                ),
-              ],
-            ).marginOnly(bottom: isDesktop ? 8 : 0),
-            Row(
-              children: [
-                isDesktop
-                    ? ConstrainedBox(
-                        constraints: const BoxConstraints(minWidth: 140),
-                        child: Text(
-                          "${translate('Password')}:",
-                          textAlign: TextAlign.right,
-                        ).marginOnly(right: 10))
-                    : SizedBox.shrink(),
-                Expanded(
-                  child: Obx(() => TextField(
-                        obscureText: secure.value,
+            Obx(() => Row(
+                  children: [
+                    stateGlobal.isPortrait.isFalse
+                        ? ConstrainedBox(
+                            constraints: const BoxConstraints(minWidth: 140),
+                            child: Text(
+                              "${translate('Username')}:",
+                              textAlign: TextAlign.right,
+                            ).marginOnly(right: 10))
+                        : SizedBox.shrink(),
+                    Expanded(
+                      child: TextField(
                         decoration: InputDecoration(
-                            labelText: isDesktop ? null : translate('Password'),
-                            suffixIcon: IconButton(
-                                onPressed: () => secure.value = !secure.value,
-                                icon: Icon(secure.value
-                                    ? Icons.visibility_off
-                                    : Icons.visibility))),
-                        controller: passwordController,
-                      )),
-                ),
-              ],
-            )
+                            labelText:
+                                isDesktop ? null : translate('Username')),
+                        controller: userController,
+                      ),
+                    ),
+                  ],
+                ).marginOnly(bottom: stateGlobal.isPortrait.isFalse ? 8 : 0)),
+            Obx(() => Row(
+                  children: [
+                    stateGlobal.isPortrait.isFalse
+                        ? ConstrainedBox(
+                            constraints: const BoxConstraints(minWidth: 140),
+                            child: Text(
+                              "${translate('Password')}:",
+                              textAlign: TextAlign.right,
+                            ).marginOnly(right: 10))
+                        : SizedBox.shrink(),
+                    Expanded(
+                      child: Obx(() => TextField(
+                            obscureText: secure.value,
+                            maxLength: maxLength,
+                            decoration: InputDecoration(
+                                labelText:
+                                    isDesktop ? null : translate('Password'),
+                                suffixIcon: IconButton(
+                                    onPressed: () =>
+                                        secure.value = !secure.value,
+                                    icon: Icon(secure.value
+                                        ? Icons.visibility_off
+                                        : Icons.visibility))),
+                            controller: passwordController,
+                          )),
+                    ),
+                  ],
+                ))
           ],
         ),
       ),
