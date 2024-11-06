@@ -443,7 +443,8 @@ jobs:
             rustdesk*-aarch64.dmg
 
   build-rustdesk-ios:
-    if: ${{ inputs.upload-artifact }}
+    if: false
+      #if: ${{ inputs.upload-artifact }}
     name: build rustdesk ios ipa
     runs-on: ${{ matrix.job.os }}
     strategy:
@@ -603,6 +604,7 @@ jobs:
       #       flutter/build/ios/ipa/*.ipa
 
   build-for-macOS:
+    if: False
     name: ${{ matrix.job.target }}
     runs-on: ${{ matrix.job.os }}
     strategy:
@@ -826,6 +828,7 @@ jobs:
     uses: ./.github/workflows/bridge.yml
 
   build-rustdesk-android:
+    if: False
     needs: [generate-bridge-linux]
     name: build rustdesk android apk ${{ matrix.job.target }}
     runs-on: ${{ matrix.job.os }}
@@ -1109,6 +1112,7 @@ jobs:
             signed-apk/rustdesk-${{ env.VERSION }}-${{ matrix.job.arch }}.apk
 
   build-rustdesk-android-universal:
+    if: False
     needs: [build-rustdesk-android]
     name: build rustdesk android universal apk
     if: ${{ inputs.upload-artifact }}
