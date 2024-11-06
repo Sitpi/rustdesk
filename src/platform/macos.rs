@@ -17,8 +17,14 @@ use core_graphics::{
     display::{kCGNullWindowID, kCGWindowListOptionOnScreenOnly, CGWindowListCopyWindowInfo},
     window::{kCGWindowName, kCGWindowOwnerPID},
 };
-use hbb_common::{anyhow::anyhow, bail, log, message_proto::Resolution};
+use hbb_common::{
+    anyhow::anyhow,
+    bail, log,
+    message_proto::{DisplayInfo, Resolution},
+    sysinfo::{Pid, Process, ProcessRefreshKind, System},
+};
 use include_dir::{include_dir, Dir};
+use objc::rc::autoreleasepool;
 use objc::{class, msg_send, sel, sel_impl};
 use scrap::{libc::c_void, quartz::ffi::*};
 use std::path::PathBuf;
@@ -55,6 +61,10 @@ pub fn major_version() -> u32 {
 }
 
 pub fn is_process_trusted(prompt: bool) -> bool {
+    autoreleasepool(|| unsafe_is_process_trusted(prompt))
+}
+
+fn unsafe_is_process_trusted(prompt: bool) -> bool {
     unsafe {
         let value = if prompt { YES } else { NO };
         let value: id = msg_send![class!(NSNumber), numberWithBool: value];
@@ -74,10 +84,14 @@ pub fn is_can_input_monitoring(prompt: bool) -> bool {
     }
 }
 
+pub fn is_can_screen_recording(prompt: bool) -> bool {
+    autoreleasepool(|| unsafe_is_can_screen_recording(prompt))
+}
+
 // macOS >= 10.15
 // https://stackoverflow.com/questions/56597221/detecting-screen-recording-settings-on-macos-catalina/
 // remove just one app from all the permissions: tccutil reset All com.carriez.rustdesk
-pub fn is_can_screen_recording(prompt: bool) -> bool {
+fn unsafe_is_can_screen_recording(prompt: bool) -> bool {
     // we got some report that we show no permission even after set it, so we try to use new api for screen recording check
     // the new api is only available on macOS >= 10.15, but on stackoverflow, some people said it works on >= 10.16 (crash on 10.15),
     // but also some said it has bug on 10.16, so we just use it on 11.0.
@@ -197,15 +211,6 @@ pub fn is_installed_daemon(prompt: bool) -> bool {
                         .args(&["load", "-w", &agent_plist_file])
                         .status()
                         .ok();
-                    std::process::Command::new("sh")
-                        .arg("-c")
-                        .arg(&format!(
-                            "sleep 0.5; open -n /Applications/{}.app",
-                            crate::get_app_name(),
-                        ))
-                        .spawn()
-                        .ok();
-                    quit_gui();
                 }
             }
         }
@@ -262,14 +267,13 @@ pub fn uninstall_service(show_new_window: bool, sync: bool) -> bool {
                         .status()
                         .ok();
                     if show_new_window {
-                        std::process::Command::new("sh")
-                            .arg("-c")
-                            .arg(&format!(
-                                "sleep 0.5; open /Applications/{}.app",
-                                crate::get_app_name(),
-                            ))
+                        std::process::Command::new("open")
+                            .arg("-n")
+                            .arg(&format!("/Applications/{}.app", crate::get_app_name()))
                             .spawn()
                             .ok();
+                        // leave open a little time
+                        std::thread::sleep(std::time::Duration::from_millis(300));
                     }
                     quit_gui();
                 }
@@ -301,7 +305,29 @@ pub fn get_cursor_pos() -> Option<(i32, i32)> {
     */
 }
 
+pub fn get_focused_display(displays: Vec<DisplayInfo>) -> Option<usize> {
+    autoreleasepool(|| unsafe_get_focused_display(displays))
+}
+
+fn unsafe_get_focused_display(displays: Vec<DisplayInfo>) -> Option<usize> {
+    unsafe {
+        let main_screen: id = msg_send![class!(NSScreen), mainScreen];
+        let screen: id = msg_send![main_screen, deviceDescription];
+        let id: id =
+            msg_send![screen, objectForKey: NSString::alloc(nil).init_str("NSScreenNumber")];
+        let display_name: u32 = msg_send![id, unsignedIntValue];
+
+        displays
+            .iter()
+            .position(|d| d.name == display_name.to_string())
+    }
+}
+
 pub fn get_cursor() -> ResultType<Option<u64>> {
+    autoreleasepool(|| unsafe_get_cursor())
+}
+
+fn unsafe_get_cursor() -> ResultType<Option<u64>> {
     unsafe {
         let seed = CGSCurrentCursorSeed();
         if seed == LATEST_SEED {
@@ -366,8 +392,12 @@ fn get_cursor_id() -> ResultType<(id, u64)> {
     }
 }
 
-// https://github.com/stweil/OSXvnc/blob/master/OSXvnc-server/mousecursor.c
 pub fn get_cursor_data(hcursor: u64) -> ResultType<CursorData> {
+    autoreleasepool(|| unsafe_get_cursor_data(hcursor))
+}
+
+// https://github.com/stweil/OSXvnc/blob/master/OSXvnc-server/mousecursor.c
+fn unsafe_get_cursor_data(hcursor: u64) -> ResultType<CursorData> {
     unsafe {
         let (c, hcursor2) = get_cursor_id()?;
         if hcursor != hcursor2 {
@@ -484,25 +514,51 @@ pub fn lock_screen() {
 }
 
 pub fn start_os_service() {
-    crate::platform::macos::hide_dock();
-    let exe = std::env::current_exe().unwrap_or_default();
     log::info!("Username: {}", crate::username());
-    log::info!("Startime: {:?}", get_server_start_time());
+    let mut sys = System::new();
+    let path =
+        std::fs::canonicalize(std::env::current_exe().unwrap_or_default()).unwrap_or_default();
+    let mut server = get_server_start_time(&mut sys, &path);
+    if server.is_none() {
+        log::error!("Agent not started yet, please restart --server first to make delegate work",);
+        std::process::exit(-1);
+    }
+    let my_start_time = sys
+        .process((std::process::id() as usize).into())
+        .map(|p| p.start_time())
+        .unwrap_or_default() as i64;
+    log::info!("Startime: {my_start_time} vs {:?}", server);
 
     std::thread::spawn(move || loop {
-        loop {
-            std::thread::sleep(std::time::Duration::from_secs(1));
-            let Some(start_time) = get_server_start_time() else {
-                continue;
-            };
-            if start_time.0 <= start_time.1 {
-                // I tried add delegate (using tao and with its main loop0, but it works in normal mode, but not work as daemon
-                log::info!(
-                    "Agent start later, {:?}, will restart --service to make delegate work",
-                    start_time
+        std::thread::sleep(std::time::Duration::from_secs(1));
+        if server.is_none() {
+            server = get_server_start_time(&mut sys, &path);
+        }
+        let Some((start_time, pid)) = server else {
+            log::error!(
+                "Agent not started yet, please restart --server first to make delegate work",
+            );
+            std::process::exit(-1);
+        };
+        if my_start_time <= start_time + 3 {
+            log::error!(
+                    "Agent start later, {my_start_time} vs {start_time}, please start --server first to make delegate work, earlier more 3 seconds",
                 );
-                std::process::exit(0);
+            std::process::exit(-1);
+        }
+        // only refresh this pid and check if valid, no need to refresh all processes since refreshing all is expensive, about 10ms on my machine
+        if !sys.refresh_process_specifics(pid, ProcessRefreshKind::new()) {
+            server = None;
+            continue;
+        }
+        if let Some(p) = sys.process(pid.into()) {
+            if let Some(p) = get_server_start_time_of(p, &path) {
+                server = Some((p, pid));
+            } else {
+                server = None;
             }
+        } else {
+            server = None;
         }
     });
 
@@ -604,35 +660,30 @@ pub fn hide_dock() {
     }
 }
 
-fn get_server_start_time() -> Option<(i64, i64)> {
-    use hbb_common::sysinfo::System;
-    let mut sys = System::new();
-    sys.refresh_processes();
-    let mut path = std::env::current_exe().unwrap_or_default();
-    if let Ok(linked) = path.read_link() {
-        path = linked;
+#[inline]
+fn get_server_start_time_of(p: &Process, path: &PathBuf) -> Option<i64> {
+    let cmd = p.cmd();
+    if cmd.len() <= 1 {
+        return None;
     }
-    let path = path.to_string_lossy().to_lowercase();
-    let Some(my_start_time) = sys
-        .process((std::process::id() as usize).into())
-        .map(|p| p.start_time())
-    else {
+    if &cmd[1] != "--server" {
+        return None;
+    }
+    let Ok(cur) = std::fs::canonicalize(p.exe()) else {
         return None;
     };
+    if &cur != path {
+        return None;
+    }
+    Some(p.start_time() as _)
+}
+
+#[inline]
+fn get_server_start_time(sys: &mut System, path: &PathBuf) -> Option<(i64, Pid)> {
+    sys.refresh_processes_specifics(ProcessRefreshKind::new());
     for (_, p) in sys.processes() {
-        let mut cur_path = p.exe().to_path_buf();
-        if let Ok(linked) = cur_path.read_link() {
-            cur_path = linked;
-        }
-        if cur_path.to_string_lossy().to_lowercase() != path {
-            continue;
-        }
-        if p.pid().as_u32() == std::process::id() {
-            continue;
-        }
-        let parg = if p.cmd().len() <= 1 { "" } else { &p.cmd()[1] };
-        if parg == "--server" {
-            return Some((my_start_time as _, p.start_time() as _));
+        if let Some(t) = get_server_start_time_of(p, path) {
+            return Some((t, p.pid() as _));
         }
     }
     None
