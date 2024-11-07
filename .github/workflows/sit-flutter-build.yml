@@ -443,8 +443,7 @@ jobs:
             rustdesk*-aarch64.dmg
 
   build-rustdesk-ios:
-    if: false
-      #if: ${{ inputs.upload-artifact }}
+    if: ${{ inputs.upload-artifact }}
     name: build rustdesk ios ipa
     runs-on: ${{ matrix.job.os }}
     strategy:
@@ -604,7 +603,6 @@ jobs:
       #       flutter/build/ios/ipa/*.ipa
 
   build-for-macOS:
-    if: false
     name: ${{ matrix.job.target }}
     runs-on: ${{ matrix.job.os }}
     strategy:
@@ -829,7 +827,6 @@ jobs:
 
   build-rustdesk-android:
     needs: [generate-bridge-linux]
-    if: False
     name: build rustdesk android apk ${{ matrix.job.target }}
     runs-on: ${{ matrix.job.os }}
     strategy:
@@ -1112,10 +1109,9 @@ jobs:
             signed-apk/rustdesk-${{ env.VERSION }}-${{ matrix.job.arch }}.apk
 
   build-rustdesk-android-universal:
-    if: false
     needs: [build-rustdesk-android]
     name: build rustdesk android universal apk
-      #if: ${{ inputs.upload-artifact }}
+    if: ${{ inputs.upload-artifact }}
     runs-on: ubuntu-20.04
     env:
       reltype: release
@@ -1972,7 +1968,7 @@ jobs:
             flatpak/rustdesk-${{ env.VERSION }}-${{ matrix.job.arch }}${{ matrix.job.suffix }}.flatpak
 
   build-rustdesk-web:
-    if: false
+    if: False
     name: build-rustdesk-web
     runs-on: ubuntu-20.04
     strategy:
